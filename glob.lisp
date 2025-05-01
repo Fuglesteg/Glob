@@ -14,17 +14,11 @@
    (make-instance 'slither::rectangle)))
 
 (define-fragment-shader circles-fragment-shader :path "./circles.frag")
+(define-shader-program circles-shader-program
+  :vertex-shader slither/render::static-vertex-shader
+  :fragment-shader circles-fragment-shader
+  :uniforms '(circles camera zoom))
 
-(defclass circles-renderable (slither/render::static) ()
-  (:default-initargs :shader-program (slither/render::make-shader-program
-                                      :fragment-shader (circles-fragment-shader)
-                                      :vertex-shader (slither/render::static)
-                                      :uniform-symbols '(circles camera zoom))))
-
-(defvar *circles-renderable* nil)
-
-#+nil(slither/render/shader-program::shader-program-recompile (slither/render::shader-program *circles-renderable*))
- 
 (defbehavior circles-renderer
     ((circles
       :initform nil
@@ -39,24 +33,23 @@
       :initarg :camera
       :accessor circles-renderer-camera))
   (:start (circles-renderer entity)
-   (setf *circles-renderable* (make-instance 'circles-renderable))
    (with-accessors ((circles-uniform-location circles-renderer-circles-uniform-location)) circles-renderer
      (setf circles-uniform-location 1 #+nil(slither/render/shader-program::uniform-location ;; TODO: WTHELLY
                                      (slither/render/shader-program:get-uniform
                                       (slither/render::shader-program *circles-renderable*)
                                       'circles)))))
   (:tick (circles-renderer entity)
-   (let ((shader-program (slither/render::shader-program *circles-renderable*)))
+   (let ((shader-program circles-shader-program))
      #+dev(when (key-held-p :r)
-       (slither/render::define-fragment-shader circles-fragment-shader :path "./circles.frag")
-       (slither/render/shader-program:shader-program-compile shader-program))
+       (define-fragment-shader circles-fragment-shader :path "./circles.frag")
+       (slither/render/shader-program:shader-program-recompile shader-program))
      (slither::set-uniform-value shader-program
-                                (slither::uniform-location (slither/render/shader-program::get-uniform shader-program 'camera))
-                                (slither::transform-position (circles-renderer-camera circles-renderer)))
+                                 (slither::uniform-location (slither/render/shader-program::get-uniform shader-program 'camera))
+                                 (slither::transform-position (circles-renderer-camera circles-renderer)))
      (slither::set-uniform-value shader-program
                                  (slither::uniform-location (slither/render/shader-program::get-uniform shader-program 'zoom))
                                  (slither::camera-zoom (find 'slither::camera (slither::entity-behaviors (circles-renderer-camera circles-renderer))
-                                       :key #'type-of)))
+                                                             :key #'type-of)))
      (loop for circle in (circles-renderer-circles circles-renderer)
            for uniform-location from 1 by 3
            do (slither::set-uniform-value shader-program
@@ -68,7 +61,7 @@
               (slither::set-uniform-value shader-program
                                  (+ uniform-location 2)
                                  (circle-radius circle))))
-   (slither/render::render *circles-renderable*)))
+   (slither/render::draw-static :shader-program circles-shader-program)))
 
 (defun random-location ()
   (vec2 (random-float 20)
