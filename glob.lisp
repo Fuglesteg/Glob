@@ -17,7 +17,7 @@
 (define-shader-program circles-shader-program
   :vertex-shader slither/render::static-vertex-shader
   :fragment-shader circles-fragment-shader
-  :uniforms '(circles camera zoom))
+  :uniforms '(circles camera zoom window-height window-width))
 
 (defbehavior circles-renderer
     ((circles
@@ -41,11 +41,17 @@
   (:tick (circles-renderer entity)
    (let ((shader-program circles-shader-program))
      #+dev(when (key-held-p :r)
-       (define-fragment-shader circles-fragment-shader :path "./circles.frag")
-       (slither/render/shader-program:shader-program-recompile shader-program))
+            (define-fragment-shader circles-fragment-shader :path "./circles.frag")
+            (slither/render/shader-program:shader-program-recompile shader-program))
      (slither::set-uniform-value shader-program
                                  (slither::uniform-location (slither/render/shader-program::get-uniform shader-program 'camera))
                                  (slither::transform-position (circles-renderer-camera circles-renderer)))
+     (slither::set-uniform-value shader-program
+                                 (slither::uniform-location (slither/render/shader-program::get-uniform shader-program 'window-height))
+                                 slither/window:*window-height*)
+     (slither::set-uniform-value shader-program
+                                 (slither::uniform-location (slither/render/shader-program::get-uniform shader-program 'window-width))
+                                 slither/window:*window-width*)
      (slither::set-uniform-value shader-program
                                  (slither::uniform-location (slither/render/shader-program::get-uniform shader-program 'zoom))
                                  (slither::camera-zoom (find 'slither::camera (slither::entity-behaviors (circles-renderer-camera circles-renderer))
@@ -86,27 +92,37 @@
      (setf rotation (random-float 360))))
   (:tick circle
    (with-slots (position rotation velocity) circle
-     #+nil(setf position (vec2 0.7 0.4))
      (when (out-of-bounds-p circle)
-       (setf position (random-location)
+       (setf position (random-position-on-edge)
              rotation (random-float 360)
              velocity (+ 0.8 (random-float 2))))
      (setf position (v+ position 
-                        (v* (rotation->vec2 rotation) velocity slither::*dt*))))))
+                        (v* (rotation->vec2 rotation)
+                            velocity
+                            slither::*dt*))))))
+
+(defvar *bounding-distance* 20)
 
 (defmethod out-of-bounds-p ((circle circle))
   (with-slots (position) circle
     (with-vec (x y) position
       (or (< x 0)
-          (> x 20)
+          (> x *bounding-distance*)
           (< y 0)
-          (> y 20)))))
+          (> y *bounding-distance*)))))
+
+(defun random-position-on-edge ()
+  (let ((random-edge (case (random 2) (0 0) (1 *bounding-distance*)))
+        (random-point-on-axis (random (1+ *bounding-distance*))))
+    (case (random 2)
+      (0 (vec2 random-edge random-point-on-axis))
+      (1 (vec2 random-point-on-axis random-edge)))))
 
 
 #+nil(start-game 
  (lambda ()
    (let* ((camera (make-instance 'slither::entity :behaviors (list (make-instance 'slither::camera)
-                                                                   (make-instance 'slither::move :speed 0.4)
+                                                                   (make-instance 'slither::move :speed 0.05)
                                                                    (make-instance 'slither::rectangle))))
          (circles (loop repeat 40
                         collect (make-instance 'circle))))
