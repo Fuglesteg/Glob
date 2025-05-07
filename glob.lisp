@@ -17,28 +17,56 @@
 (define-shader-program circles-shader-program
   :vertex-shader slither/render::static-vertex-shader
   :fragment-shader circles-fragment-shader
-  :uniforms '(circles camera zoom window-height window-width))
+  :uniforms '(camera zoom window-height window-width))
 
 (defbehavior circles-renderer
     ((circles
       :initform nil
       :initarg :circles
       :accessor circles-renderer-circles)
-     (circles-uniform-location
+     (position-buffer
       :initform nil
-      :initarg :circles-uniform-location
-      :accessor circles-renderer-circles-uniform-location)
+      :accessor circles-renderer-position-buffer)
+     (color-buffer
+      :initform nil
+      :accessor circles-renderer-color-buffer)
+     (radius-buffer
+      :initform nil
+      :accessor circles-renderer-radius-buffer)
      (camera
       :initform nil
       :initarg :camera
       :accessor circles-renderer-camera))
   (:start (circles-renderer entity)
-   (with-accessors ((circles-uniform-location circles-renderer-circles-uniform-location)) circles-renderer
-     (setf circles-uniform-location 1 #+nil(slither/render/shader-program::uniform-location ;; TODO: WTHELLY
-                                     (slither/render/shader-program:get-uniform
-                                      (slither/render::shader-program *circles-renderable*)
-                                      'circles)))))
-  (:tick (circles-renderer entity)
+   (with-slots (position-buffer
+                color-buffer
+                radius-buffer
+                circles) circles-renderer
+     (slither/render/vertex::with-buffer buffer :shader-storage-buffer
+       (slither/render/vertex:send-buffer-data
+        (loop for circle in circles
+              append (with-vec (x y) (slither::transform-position circle)
+                       (list x y)))
+        :buffer-type :shader-storage-buffer
+        :usage-type :stream-draw)
+       (%gl:bind-buffer-base :shader-storage-buffer 0 buffer)
+       (setf position-buffer buffer))
+     (slither/render/vertex::with-buffer buffer :shader-storage-buffer
+       (slither/render/vertex:send-buffer-data
+        (loop for circle in circles
+              append (with-vec (r g b) (circle-color circle)
+                       (list r g b)))
+        :buffer-type :shader-storage-buffer)
+       (%gl:bind-buffer-base :shader-storage-buffer 1 buffer)
+       (setf color-buffer buffer))
+     (slither/render/vertex::with-buffer buffer :shader-storage-buffer
+       (slither/render/vertex:send-buffer-data
+        (loop for circle in circles
+              collect (circle-radius circle))
+        :buffer-type :shader-storage-buffer)
+       (%gl:bind-buffer-base :shader-storage-buffer 2 buffer)
+       (setf radius-buffer buffer))))
+     (:tick (circles-renderer entity)
    (let ((shader-program circles-shader-program))
      #+dev(when (key-held-p :r)
             (define-fragment-shader circles-fragment-shader :path "./circles.frag")
@@ -54,20 +82,21 @@
                                  slither/window:*window-width*)
      (slither::set-uniform-value shader-program
                                  (slither::uniform-location (slither/render/shader-program::get-uniform shader-program 'zoom))
-                                 (slither::camera-zoom (find 'slither::camera (slither::entity-behaviors (circles-renderer-camera circles-renderer))
+                                 (slither::camera-zoom (find 'slither::camera
+                                                             (slither::entity-behaviors (circles-renderer-camera circles-renderer))
                                                              :key #'type-of)))
-     (loop for circle in (circles-renderer-circles circles-renderer)
-           for uniform-location from 1 by 3
-           do (slither::set-uniform-value shader-program
-                                 uniform-location
-                                 (slither::transform-position circle))
-              (slither::set-uniform-value shader-program
-                                 (+ uniform-location 1)
-                                 (circle-color circle))
-              (slither::set-uniform-value shader-program
-                                 (+ uniform-location 2)
-                                 (circle-radius circle))))
-   (slither/render::draw-static :shader-program circles-shader-program)))
+       (slither/render/vertex::with-bound-buffer (circles-renderer-position-buffer circles-renderer) :shader-storage-buffer
+         (let ((buffer-data (%gl:map-buffer :shader-storage-buffer :write-only)))
+           #+nil(static-vectors:replace-foreign-memory buffer-data (static-vectors:static-vector-pointer positions) (length positions))
+           (unwind-protect
+                (loop for circle in (circles-renderer-circles circles-renderer)
+                      for i from 0 by 2
+                      do (with-vec (x y) (slither::transform-position circle)
+                           (setf (cffi:mem-aref buffer-data :float i) (coerce x 'single-float))
+                           (setf (cffi:mem-aref buffer-data :float (1+ i)) (coerce y 'single-float))))
+             (%gl:unmap-buffer :shader-storage-buffer))))
+     (%gl:bind-buffer-base :shader-storage-buffer 0 (circles-renderer-position-buffer circles-renderer))
+     (slither/render::draw-static :shader-program circles-shader-program))))
 
 (defun random-location ()
   (vec2 (random-float 20)
@@ -101,7 +130,7 @@
                             velocity
                             slither::*dt*))))))
 
-(defvar *bounding-distance* 20)
+(defparameter *bounding-distance* 40)
 
 (defmethod out-of-bounds-p ((circle circle))
   (with-slots (position) circle
@@ -122,9 +151,9 @@
 #+nil(start-game 
  (lambda ()
    (let* ((camera (make-instance 'slither::entity :behaviors (list (make-instance 'slither::camera)
-                                                                   (make-instance 'slither::move :speed 0.05)
+                                                                   (make-instance 'slither::move :speed 0.5)
                                                                    (make-instance 'slither::rectangle))))
-         (circles (loop repeat 40
+         (circles (loop repeat 400
                         collect (make-instance 'circle))))
      (add-entity (make-instance 'slither::entity
                                 :behaviors (list (make-instance 'circles-renderer

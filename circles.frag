@@ -2,14 +2,24 @@
 
 out vec4 FragColor;
 
-struct Circle {
-    vec2 location;
-    vec3 color;
-    float radius;
+#define CIRCLES_COUNT 400
+
+layout (std430, binding = 0) buffer circlePositionsBuffer
+{
+    vec2 circlePositions[CIRCLES_COUNT];
+};
+
+layout (std430, binding = 1) buffer circleColorsBuffer
+{
+    vec3 circleColors[CIRCLES_COUNT];
+};
+
+layout (std430, binding = 2) buffer circlesRadiiBuffer
+{
+    float circleRadii[CIRCLES_COUNT];
 };
 
 uniform vec2 camera = vec2(0.0, 0.0);
-uniform Circle circles[40];
 uniform float zoom = 1.0;
 uniform int windowWidth = 1920;
 uniform int windowHeight = 1080;
@@ -30,17 +40,20 @@ void main() {
     float minimumDistance = 2000.0;
     float totalWeight = 0.0;
 
-    for (int i = 0; i < circles.length(); i++) {
-        Circle circle = circles[i];
-        float distance = distance(uv, circle.location * zoom - camera);
-        float signedDistance = distance - circle.radius * zoom;
+    for (int i = 0; i < CIRCLES_COUNT; i++) {
+        vec2 position = circlePositions[i];
+        vec3 color = circleColors[i];
+        float radius = circleRadii[i];
 
-        // if (distance > (circle.radius * zoom) + zoom * 50)
-        //     continue;
+        float distance = distance(uv, (position - camera) * zoom);
+        float signedDistance = distance - radius * zoom;
 
-        minimumDistance = smoothMin(minimumDistance, signedDistance, circle.radius * zoom);
-        float weight = smoothstep(0.0, distance, circle.radius * zoom);
-        finalColor += circle.color * weight;
+        if (distance > (radius * zoom) + zoom * 10)
+            continue;
+
+        minimumDistance = smoothMin(minimumDistance, signedDistance, radius * zoom);
+        float weight = smoothstep(0.0, distance, radius * zoom);
+        finalColor += color * weight;
         totalWeight += weight;
     }
 
@@ -48,5 +61,6 @@ void main() {
         finalColor /= totalWeight;
     }
 
+    //FragColor = vec4(finalColor, 1.0);
     FragColor = mix(vec4(finalColor, 1.0), vec4(0.0, 0.0, 0.0, 0.0), step(0.0, minimumDistance));
 }
