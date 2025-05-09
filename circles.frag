@@ -2,7 +2,7 @@
 
 out vec4 FragColor;
 
-#define CIRCLES_COUNT 400
+#define CIRCLES_COUNT 40
 
 layout (std430, binding = 0) buffer circlePositionsBuffer
 {
@@ -34,25 +34,31 @@ float smax(float a, float b, float k) {
 }
 
 void main() {
-    vec2 uv = gl_FragCoord.xy / max(windowHeight, windowWidth);
+    float aspect = float(windowWidth) / float(windowHeight);
+    vec2 uv = gl_FragCoord.xy / vec2(windowWidth, windowHeight);
+    uv.x *= aspect;
 
     vec3 finalColor = vec3(0.0, 0.0, 0.0);
     float minimumDistance = 2000.0;
     float totalWeight = 0.0;
 
-    for (int i = 0; i < CIRCLES_COUNT; i++) {
-        vec2 position = circlePositions[i];
+    for (int i = 0; i < CIRCLES_COUNT + 1; i++) {
+        vec2 position = (circlePositions[i] - camera) * zoom;
+        position.x *= aspect;
+        position += vec2(0.5 * aspect, 0.5);
+
         vec3 color = circleColors[i];
-        float radius = circleRadii[i];
+        float radius = circleRadii[i] * zoom;
 
-        float distance = distance(uv, (position - camera) * zoom);
-        float signedDistance = distance - radius * zoom;
+        float distance = distance(uv, position);
 
-        if (distance > (radius * zoom) + zoom * 10)
+        if (distance > radius + zoom * 10)
             continue;
 
-        minimumDistance = smoothMin(minimumDistance, signedDistance, radius * zoom);
-        float weight = smoothstep(0.0, distance, radius * zoom);
+        float signedDistance = distance - radius;
+
+        minimumDistance = smoothMin(minimumDistance, signedDistance, radius);
+        float weight = smoothstep(0.0, distance, radius);
         finalColor += color * weight;
         totalWeight += weight;
     }
@@ -61,6 +67,5 @@ void main() {
         finalColor /= totalWeight;
     }
 
-    //FragColor = vec4(finalColor, 1.0);
     FragColor = mix(vec4(finalColor, 1.0), vec4(0.0, 0.0, 0.0, 0.0), step(0.0, minimumDistance));
 }
