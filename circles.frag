@@ -42,7 +42,7 @@ void main() {
     float minimumDistance = 2000.0;
     float totalWeight = 0.0;
 
-    for (int i = 0; i < CIRCLES_COUNT + 1; i++) {
+    for (int i = 0; i <= CIRCLES_COUNT; i++) {
         vec2 position = (circlePositions[i] - camera) * zoom;
         position.x *= aspect;
         position += vec2(0.5 * aspect, 0.5);

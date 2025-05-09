@@ -13,11 +13,14 @@
    (make-instance 'slither::camera)
    (make-instance 'slither::rectangle)))
 
-(define-fragment-shader circles-fragment-shader :path "./circles.frag")
+(define-fragment-shader circles-fragment-shader :path #P"./circles.frag")
 (define-shader-program circles-shader-program
   :vertex-shader slither/render::static-vertex-shader
   :fragment-shader circles-fragment-shader
   :uniforms '(camera zoom window-height window-width))
+
+(defparameter *bounding-width* 40)
+(defparameter *bounding-height* 20)
 
 (defbehavior circles-renderer
     ((circles
@@ -66,7 +69,11 @@
         :buffer-type :shader-storage-buffer)
        (%gl:bind-buffer-base :shader-storage-buffer 2 buffer)
        (setf radius-buffer buffer))))
-     (:tick (circles-renderer entity)
+  (:tick (circles-renderer entity)
+   #+nil(setf *bounding-height* (or (and slither/window:*window-height* (* slither/window:*window-height* 0.01))
+                               *bounding-height*)
+         *bounding-width* (or (and slither/window:*window-width* (* slither/window:*window-width* 0.01))
+                              *bounding-width*))
    (let ((shader-program circles-shader-program))
      #+dev(when (key-held-p :r)
             (define-fragment-shader circles-fragment-shader :path "./circles.frag")
@@ -80,27 +87,24 @@
      (slither::set-uniform-value shader-program
                                  (slither::uniform-location (slither/render/shader-program::get-uniform shader-program 'window-width))
                                  slither/window:*window-width*)
-     (slither::set-uniform-value shader-program
-                                 (slither::uniform-location (slither/render/shader-program::get-uniform shader-program 'zoom))
-                                 (slither::camera-zoom (find 'slither::camera
-                                                             (slither::entity-behaviors (circles-renderer-camera circles-renderer))
-                                                             :key #'type-of)))
-       (slither/render/vertex::with-bound-buffer (circles-renderer-position-buffer circles-renderer) :shader-storage-buffer
-         (let ((buffer-data (%gl:map-buffer :shader-storage-buffer :write-only)))
-           #+nil(static-vectors:replace-foreign-memory buffer-data (static-vectors:static-vector-pointer positions) (length positions))
-           (unwind-protect
-                (loop for circle in (circles-renderer-circles circles-renderer)
-                      for i from 0 by 2
-                      do (with-vec (x y) (slither::transform-position circle)
-                           (setf (cffi:mem-aref buffer-data :float i) (coerce x 'single-float))
-                           (setf (cffi:mem-aref buffer-data :float (1+ i)) (coerce y 'single-float))))
-             (%gl:unmap-buffer :shader-storage-buffer))))
+     (let ((camera-behavior (find 'slither::camera
+                                  (slither::entity-behaviors (circles-renderer-camera circles-renderer))
+                                  :key #'type-of)))
+       (when camera-behavior
+         (slither::set-uniform-value shader-program
+                                     (slither::uniform-location (slither/render/shader-program::get-uniform shader-program 'zoom))
+                                     (slither::camera-zoom camera-behavior))))
+     (slither/render/vertex::with-bound-buffer (circles-renderer-position-buffer circles-renderer) :shader-storage-buffer
+       (let ((buffer-data (%gl:map-buffer :shader-storage-buffer :write-only)))
+         (unwind-protect
+              (loop for circle in (circles-renderer-circles circles-renderer)
+                    for i from 0 by 2
+                    do (with-vec (x y) (slither::transform-position circle)
+                         (setf (cffi:mem-aref buffer-data :float i) (coerce x 'single-float))
+                         (setf (cffi:mem-aref buffer-data :float (1+ i)) (coerce y 'single-float))))
+           (%gl:unmap-buffer :shader-storage-buffer))))
      (%gl:bind-buffer-base :shader-storage-buffer 0 (circles-renderer-position-buffer circles-renderer))
      (slither/render::draw-static :shader-program circles-shader-program))))
-
-(defun random-location ()
-  (vec2 (random-float 20)
-        (random-float 20)))
 
 (defentity circle
   ((radius
@@ -130,31 +134,108 @@
                             velocity
                             slither::*dt*))))))
 
-(defparameter *bounding-distance* 40)
-
 (defmethod out-of-bounds-p ((circle circle))
   (with-slots (position) circle
     (with-vec (x y) position
       (or (< x 0)
-          (> x *bounding-distance*)
+          (> x *bounding-width*)
           (< y 0)
-          (> y *bounding-distance*)))))
+          (> y *bounding-height*)))))
+
+(defmacro random-case (&body cases)
+  "Evaluate a random case of `cases`.
+Case is determined at runtime."
+  `(case (random ,(length cases))
+     ,@(loop for case in cases
+             for i from 0
+             collect `(,i ,case))))
 
 (defun random-position-on-edge ()
-  (let ((random-edge (case (random 2) (0 0) (1 *bounding-distance*)))
-        (random-point-on-axis (random (1+ *bounding-distance*))))
-    (case (random 2)
-      (0 (vec2 random-edge random-point-on-axis))
-      (1 (vec2 random-point-on-axis random-edge)))))
+  (random-case
+    (vec2 (random-case 0 *bounding-width*)
+          (random (1+ *bounding-height*)))
+    (vec2 (random (1+ *bounding-width*))
+          (random-case 0 *bounding-height*))))
 
+(slither/assets:defasset logo #P"./logo.png" :png)
+(defvar *texture* (make-instance 'slither/render/texture:texture :asset 'logo))
+
+(defbehavior texture-renderer
+    ()
+  (:tick (texture-renderer entity)
+   (with-accessors ((position transform-position)
+                    (size transform-size)) entity
+     (slither/render::draw-texture position size *texture*))))
+
+#+nil(add-entity (make-instance 'slither::entity :behaviors (list (make-instance 'slither::camera)
+                                                             (make-instance 'texture-renderer))))
+
+(slither/assets:defasset font #P"./font.png" :png)
+(defvar *font-array-texture* (make-instance 'slither/render/array-texture:array-texture
+                                            :asset 'font
+                                            :width 6
+                                            :height 8))
+
+(defbehavior font-renderer
+    ((text
+      :initarg :text
+      :initform "text"
+      :accessor font-renderer-text
+      :type string))
+  (:tick (font-renderer entity)
+   (with-accessors ((position transform-position)
+                    (size transform-size)) entity
+     (labels ((string->font-char-codes (string)
+                (loop for char across string
+                      collect (case char
+                                (#\Space 0) (#\! 1) (#\" 2) (#\# 3) (#\$ 4)
+                                (#\% 5) (#\& 6) (#\' 7) (#\( 8)
+                                (#\) 9) (#\* 10) (#\+ 11) (#\, 12)
+                                (#\- 13) (#\. 14) (#\/ 15) (#\0 16)
+                                (#\1 17) (#\2 18) (#\3 19) (#\4 20)
+                                (#\5 21) (#\6 22) (#\7 23) (#\8 24)
+                                (#\9 25) (#\: 26) (#\; 27) (#\< 28)
+                                (#\= 29) (#\> 30) (#\? 31) (#\@ 32)
+                                (#\A 33) (#\B 34) (#\C 35) (#\D 36)
+                                (#\E 37) (#\F 38) (#\G 39) (#\H 40)
+                                (#\I 41) (#\J 42) (#\K 43) (#\L 44)
+                                (#\M 45) (#\N 46) (#\O 47) (#\P 48)
+                                (#\Q 49) (#\R 50) (#\S 51) (#\T 52)
+                                (#\U 53) (#\V 54) (#\W 55) (#\X 56)
+                                (#\Y 57) (#\Z 58) (#\[ 59) (#\\ 60)
+                                (#\] 61) (#\^ 62) (#\_ 63) (#\` 64)
+                                (#\a 65) (#\b 66) (#\c 67) (#\d 68)
+                                (#\e 69) (#\f 70) (#\g 71) (#\h 72)
+                                (#\i 73) (#\j 74) (#\k 75) (#\l 76)
+                                (#\m 77) (#\n 78) (#\o 79) (#\p 80)
+                                (#\q 81) (#\r 82) (#\s 83) (#\t 84)
+                                (#\u 85) (#\v 86) (#\w 87) (#\x 88)
+                                (#\y 89) (#\z 90) (#\{ 91) #+nil(#\: 92) ;; TODO: Wtf is 92?
+                                (#\} 93)))))
+     (let ((text (string->font-char-codes (font-renderer-text font-renderer))))
+       (loop for char in text
+             for i from 0
+             do (slither/render::draw-array-texture (v+ position (vec2 (* (1+ 0.6) i) 0))
+                                                    (vec2 0.6 0.8)
+                                                    char
+                                                    *font-array-texture*)))))))
+
+#+nil(add-entity (make-instance 'slither::entity
+                                :size (vec2 1.0 1.0)
+                                :behaviors (list (make-instance 'slither::camera)
+                                                 (make-instance 'font-renderer))))
 
 #+nil(start-game 
  (lambda ()
-   (let* ((camera (make-instance 'slither::entity :behaviors (list (make-instance 'slither::camera)
-                                                                   (make-instance 'slither::move :speed 0.5)
-                                                                   (make-instance 'slither::rectangle))))
-         (circles (loop repeat 400
-                        collect (make-instance 'circle))))
+   (let* ((camera (make-instance 'circle
+                                 :size (vec2 1.0 1.0)
+                                 :color (vec3 1.0 1.0 1.0)
+                                 :radius 0.8
+                                 :behaviors (list (make-instance 'slither::camera))))
+         (circles (append 
+                   (loop repeat 40
+                        collect (make-instance 'circle))
+                   (list camera))))
      (add-entity (make-instance 'slither::entity
                                 :behaviors (list (make-instance 'circles-renderer
                                                                 :circles circles
