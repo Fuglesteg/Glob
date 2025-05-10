@@ -44,7 +44,6 @@ void main() {
 
     for (int i = 0; i <= CIRCLES_COUNT; i++) {
         vec2 position = (circlePositions[i] - camera) * zoom;
-        position.x *= aspect;
         position += vec2(0.5 * aspect, 0.5);
 
         vec3 color = circleColors[i];
