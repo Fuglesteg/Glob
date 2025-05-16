@@ -2,16 +2,20 @@
   (:use #:cl 
         #:slither 
         #:slither/utils
-        #:org.shirakumo.fraf.math.vectors)
-  (:import-from #:slither/input :key-held-p))
+        #:org.shirakumo.fraf.math.vectors
+        #:org.shirakumo.fraf.math.matrices)
+(:import-from #:slither/input :key-held-p))
 
 (in-package :glob)
 
-(defentity player ()
-  (:behaviors
-   (make-instance 'slither::move)
-   (make-instance 'slither::camera)
-   (make-instance 'slither::rectangle)))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defmacro random-case (&body cases)
+    "Evaluate a random case of `cases`.
+Case is determined at runtime."
+    `(case (random ,(length cases))
+       ,@(loop for case in cases
+               for i from 0
+               collect `(,i ,case)))))
 
 (define-fragment-shader circles-fragment-shader :path #P"./circles.frag")
 (define-shader-program circles-shader-program
@@ -19,15 +23,10 @@
   :fragment-shader circles-fragment-shader
   :uniforms '(camera zoom window-height window-width))
 
-(defparameter *bounding-width* 40)
-(defparameter *bounding-height* 20)
+(defvar *circles* nil)
 
 (defentity circles-renderer
-    ((circles
-      :initform nil
-      :initarg :circles
-      :accessor circles-renderer-circles)
-     (position-buffer
+    ((position-buffer
       :initform nil
       :accessor circles-renderer-position-buffer)
      (color-buffer
@@ -35,19 +34,14 @@
       :accessor circles-renderer-color-buffer)
      (radius-buffer
       :initform nil
-      :accessor circles-renderer-radius-buffer)
-     (camera
-      :initform nil
-      :initarg :camera
-      :accessor circles-renderer-camera))
+      :accessor circles-renderer-radius-buffer))
   (:start circles-renderer
    (with-slots (position-buffer
                 color-buffer
-                radius-buffer
-                circles) circles-renderer
+                radius-buffer) circles-renderer
      (slither/render/vertex::with-buffer buffer :shader-storage-buffer
        (slither/render/vertex:send-buffer-data
-        (loop for circle in circles
+        (loop for circle in *circles*
               append (with-vec (x y) (slither::transform-position circle)
                        (list x y)))
         :buffer-type :shader-storage-buffer
@@ -56,7 +50,7 @@
        (setf position-buffer buffer))
      (slither/render/vertex::with-buffer buffer :shader-storage-buffer
        (slither/render/vertex:send-buffer-data
-        (loop for circle in circles
+        (loop for circle in *circles*
               append (with-vec (r g b) (circle-color (entity-find-behavior circle 'circle-behavior))
                        (list r g b)))
         :buffer-type :shader-storage-buffer
@@ -65,7 +59,7 @@
        (setf color-buffer buffer))
      (slither/render/vertex::with-buffer buffer :shader-storage-buffer
        (slither/render/vertex:send-buffer-data
-        (loop for circle in circles
+        (loop for circle in *circles*
               collect (vx (transform-size circle)))
         :buffer-type :shader-storage-buffer
         :usage-type :dynamic-draw)
@@ -75,14 +69,14 @@
    (let ((shader-program circles-shader-program))
      (slither::set-uniform-value shader-program
                                  (slither::uniform-location (slither/render/shader-program::get-uniform shader-program 'camera))
-                                 (slither::transform-position (circles-renderer-camera circles-renderer)))
+                                 (slither::transform-position *camera*))
      (slither::set-uniform-value shader-program
                                  (slither::uniform-location (slither/render/shader-program::get-uniform shader-program 'window-height))
                                  slither/window:*window-height*)
      (slither::set-uniform-value shader-program
                                  (slither::uniform-location (slither/render/shader-program::get-uniform shader-program 'window-width))
                                  slither/window:*window-width*)
-     (let ((camera-behavior (entity-find-behavior (circles-renderer-camera circles-renderer) 'slither::camera)))
+     (let ((camera-behavior (entity-find-behavior *camera* 'slither::camera)))
        (when camera-behavior
          (slither::set-uniform-value shader-program
                                      (slither::uniform-location (slither/render/shader-program::get-uniform shader-program 'zoom))
@@ -90,7 +84,7 @@
      (slither/render/vertex::with-bound-buffer (circles-renderer-position-buffer circles-renderer) :shader-storage-buffer
        (let ((buffer-data (%gl:map-buffer :shader-storage-buffer :write-only)))
          (unwind-protect
-              (loop for circle in (circles-renderer-circles circles-renderer)
+              (loop for circle in *circles*
                     for i from 0 by 2
                     do (with-vec (x y) (slither::transform-position circle)
                          (setf (cffi:mem-aref buffer-data :float i) (coerce x 'single-float))
@@ -104,7 +98,7 @@
   (let ((color (circle-color (entity-find-behavior circle 'circle-behavior))))
     (slither/render/vertex::with-bound-buffer (circles-renderer-color-buffer circles-renderer) :shader-storage-buffer
       (let ((color-buffer (%gl:map-buffer :shader-storage-buffer :write-only))
-            (position (* (position circle (circles-renderer-circles circles-renderer)) 3)))
+            (position (* (position circle *circles*) 3)))
         (unwind-protect
              (progn
                (setf (cffi:mem-aref color-buffer :float position) (coerce (vx color) 'single-float)
@@ -117,11 +111,23 @@
   (let ((radius (vx (transform-size circle))))
     (slither/render/vertex::with-bound-buffer (circles-renderer-radius-buffer circles-renderer) :shader-storage-buffer
       (let ((color-buffer (%gl:map-buffer :shader-storage-buffer :write-only))
-            (position (position circle (circles-renderer-circles circles-renderer))))
+            (position (position circle *circles*)))
         (unwind-protect
              (progn
                (setf (cffi:mem-aref color-buffer :float position) (coerce radius 'single-float)))
           (%gl:unmap-buffer :shader-storage-buffer))))))
+
+(defmethod out-of-bounds-p ((entity slither::entity))
+  (let ((left (- (* *arena-width* 0.5)))
+        (right (* *arena-width* 0.5))
+        (top (* *arena-height* 0.5))
+        (bottom (- (* *arena-height* 0.5)))
+        (position (transform-position entity))
+        (radius (* (circle-radius entity) 2)))
+    (or (> (+ (vx position) radius) right)
+        (< (- (vx position) radius) left)
+        (> (+ (vy position) radius) top)
+        (< (- (vy position) radius) bottom))))
 
 (defbehavior inertia-behavior
     ((velocity
@@ -129,12 +135,16 @@
       :initform (vec2 0.0 0.0)
       :accessor inertia-velocity))
   (:tick (inertia entity)
-   (with-vec (x y) 
-       (nv+ (transform-position entity) (v* (inertia-velocity inertia) *dt*))))
-  (inertia-velocity+ (inertia entity vector-to-add)
-                     (with-accessors ((velocity inertia-velocity)) inertia
-                       (setf velocity
-                             (v+ velocity vector-to-add)))))
+   (with-vec (x y)
+       (nv- (inertia-velocity inertia) (v* (inertia-velocity inertia) *dt*)) ; Friction
+       (nv+ (transform-position entity) (v* (inertia-velocity inertia) *dt*)))
+   (when (out-of-bounds-p entity)
+     (inertia-velocity+ inertia (v* (vunit (transform-position entity)) -1 10 *dt*)))))
+
+(defmethod inertia-velocity+ (inertia vector-to-add)
+  (with-accessors ((velocity inertia-velocity)) inertia
+    (setf velocity
+          (v+ velocity vector-to-add))))
 
 (defbehavior circle-behavior
   ((color
@@ -142,21 +152,61 @@
     :initform (random-color)
     :accessor circle-color)))
 
+(defmethod circle-interest ((circle slither::entity))
+  "Returns circle of interest, closest circle, and if it's a threat or a target"
+  (let (interest (closest-distance 20000))
+    (dolist (current-circle *circles*)
+      (unless (eq current-circle circle)
+        (let ((distance (- (transform-distance circle current-circle)
+                           (+ (* (circle-radius circle) 2)
+                              (* (circle-radius current-circle) 2)))))
+          (when (< 5 distance)
+            (when (< distance closest-distance)
+              (setf interest current-circle
+                    closest-distance distance))))))
+    (values interest
+            (if interest
+                (cond
+                  ((< *eat-forgiveness* (- (circle-radius circle)
+                                           (circle-radius interest)))
+                   :target)
+                  ((< *eat-forgiveness* (- (circle-radius interest)
+                                           (circle-radius circle)))
+                   :threat))
+                nil))))
+
 (defbehavior circle-move-behavior
-    ()
+    ((think-delay
+      :initform (random-float 2.0))
+     (direction
+      :initform (vec2 (random-float) (random-float))))
   (:start (circle-behavior entity)
-   (with-slots (position rotation) entity
-     (with-slots (velocity) (entity-find-behavior entity 'inertia-behavior)
-       (setf position (random-position-on-edge)
-             rotation (random-float 360)
-             velocity (nv+ (rotation->vec2 rotation) (+ 0.8 (random-float 2)))))))
-  (:tick (circle-behavior entity)
-   (when (out-of-bounds-p entity)
-     (with-slots (position rotation) entity
-       (with-slots (velocity) (entity-find-behavior entity 'inertia-behavior)
-         (setf position (random-position-on-edge)
-               rotation (random-float 360)
-               velocity (nv* (rotation->vec2 rotation) (+ 0.8 (random-float 2)))))))))
+   (circle-reset entity))
+  (:tick (circle-move entity)
+   (with-slots (think-delay direction) circle-move
+     (inertia-velocity+ (entity-find-behavior entity 'inertia-behavior) (v* direction 2 *dt*))
+     (decf think-delay *dt*)
+     (when (<= think-delay 0)
+       (setf think-delay (random-float 2.0))
+       (multiple-value-bind (interest type) (circle-interest entity)
+         (when interest
+           (case type
+             (:target (setf direction (vunit (v- (transform-position interest)
+                                                 (transform-position entity)))))
+             (:threat (setf direction (vunit (v- (transform-position entity)
+                                                 (transform-position interest))))))))))))
+
+(defmethod circle-reset ((circle slither::entity))
+  (with-slots (position size) circle
+    (with-slots (velocity) (entity-find-behavior circle 'inertia-behavior)
+      (setf position (random-position)
+            velocity (vec2 0 0)
+            size (let ((random-size (+ 0.4 (random-float))))
+                   (vec2 random-size random-size)))))
+  (let ((circles-renderer (entities-find-entity 'circles-renderer)))
+    (when circles-renderer
+      (circles-renderer-update-color circles-renderer circle)
+      (circles-renderer-update-radius circles-renderer circle))))
 
 (defentity circle
     ()
@@ -164,38 +214,128 @@
    (make-instance 'circle-behavior)
    (make-instance 'circle-collision)
    (make-instance 'circle-move-behavior)
-   (make-instance 'inertia-behavior)
-   (make-instance 'sticky-behavior))
+   (make-instance 'inertia-behavior))
   (:start circle
    (setf (transform-size circle)
          (let ((random-size (+ 0.4 (random-float))))
            (vec2 random-size random-size)))))
 
+(defmethod circle-radius ((circle slither::entity))
+  (vx (transform-size circle)))
+
+(defmethod (setf circle-radius) (new-value (circle slither::entity))
+  (let ((new-value (clamp new-value 0 2000)))
+    (setf (transform-size circle)
+          (vec2 new-value new-value)))
+  (circles-renderer-update-radius (entities-find-entity 'circles-renderer)
+                                  circle))
+
+(defmethod circles-colliding-p ((circle-1 slither::entity) (circle-2 slither::entity))
+  (with-accessors ((circle-1-position transform-position)
+                   (circle-1-size transform-size)) circle-1
+    (with-accessors ((circle-2-position transform-position)
+                     (circle-2-size transform-size)) circle-2
+      (let ((circle-1-radius (* (vx circle-1-size) 2))
+            (circle-2-radius (* (vx circle-2-size) 2))
+            (distance (abs (vdistance circle-2-position circle-1-position))))
+        (values
+         (< distance
+            (- circle-1-radius circle-2-radius))
+         distance)))))
+
+(defparameter *eat-forgiveness* 0.2)
+
+(defbehavior circle-collision
+    ()
+  (:tick (circle-collision entity)
+   (loop for circle in *circles*
+         do (when (and (circles-colliding-p entity circle)
+                       (> (- (circle-radius entity)
+                             (circle-radius circle))
+                          *eat-forgiveness*))
+                  (circle-eat entity circle)))))
+
+(defmethod circle-eat ((eater slither::entity) (food slither::entity))
+  (let ((food-to-eat (clamp (* 10 *dt*) 0 (circle-radius food))))
+    (incf (circle-radius eater) food-to-eat)
+    (decf (circle-radius food) food-to-eat))
+  (when (>= 0.0 (circle-radius food))
+    (if (eql *player* food)
+        (player-lost)
+        (circle-reset food)))
+  (when (eql *player* eater)
+    (setf *final-score* (score))
+    (setf (smooth-camera-zoom *camera*) (clamp (- 0.06 (* 0.05 (smoothstep (/ (vx (transform-size eater)) 10) 0 1)))
+                                               0.000001
+                                               1))))
+
+(defparameter *arena-width* 200)
+(defparameter *arena-height* 200)
+
+(defentity arena-borders
+    ()
+  (:tick entity
+   (let ((left (- (* *arena-width* 0.5)))
+         (right (* *arena-width* 0.5))
+         (top (* *arena-height* 0.5))
+         (bottom (- (* *arena-height* 0.5)))
+         (color (vec4 1 1 1 0.8)))
+     (draw-rectangle (vec2 0 top) (vec2 *arena-width* 1.0) color)
+     (draw-rectangle (vec2 0 bottom) (vec2 *arena-width* 1.0) color)
+     (draw-rectangle (vec2 left 0) (vec2 1.0 *arena-height*) color)
+     (draw-rectangle (vec2 right 0) (vec2 1.0 *arena-height*) color))))
+
+(defun random-position ()
+  (vec2 (- (random-float *arena-width* 1000) (* *arena-width* 0.5))
+        (- (random-float *arena-height* 1000) (* *arena-height* 0.5))))
+
 (defvar *player* nil)
 
 (defentity player
-    ((captured-circles
-      :initform nil))
+    ()
   (:behaviors
-   (make-instance 'circle-behavior))
+   (make-instance 'circle-behavior)
+   (make-instance 'inertia-behavior)
+   (make-instance 'circle-collision))
   (:start player
    (setf *player* player))
   (:tick player
-   (setf (transform-position player)
-         (v+ (transform-position player)
-             (v* (v- (normalized-mouse-position) 0.5)
-                 (vec2 1 -1) 10 *dt*)))))
+   (unless *game-over-menu*
+     (inertia-velocity+ (entity-find-behavior player 'inertia-behavior)
+                        (v* (vclamp -0.5 (v* (normalized-screen-space-mouse-position) 5) 0.5)
+                            (vec2 1 -1) 4 *dt*)))
+   ;; Check if player has won or lost
+   (let ((player-won-game (<= 2000 (circle-radius player)))
+         (player-lost-game (find-if (lambda (circle) 
+                                      (<= 2000 (circle-radius circle)))
+                                    *circles*)))
+     (cond
+       (player-won-game (player-won))
+       (player-lost-game (player-lost-game)))))
 
-(defmethod player-captured-circles ((player player))
-  (slot-value player 'captured-circles))
+(defun player-won ()
+  (unless *game-over-menu*
+    (setf *game-over-menu*
+          (list (make-instance 'game-won-header)
+                (make-instance 'restart-button)))
+    (apply #'append-entity *game-over-menu*)))
 
-(defmethod (setf player-captured-circles) (new-value
-                                           (player player))
-  (setf (slot-value player 'captured-circles) new-value)
-  (setf (smooth-camera-zoom *camera*) (- 0.06 (* 0.001 (length new-value)))))
-                      
+(defun player-lost-game ()
+  (unless *game-over-menu*
+    (setf *game-over-menu*
+          (list (make-instance 'game-over-header)
+                (make-instance 'restart-button)))
+    (apply #'append-entity *game-over-menu*)))
 
-(defvar *camera* nil)
+(defvar *game-over-menu* nil)
+  
+(defun player-lost ()
+  (unless *game-over-menu*
+    (setf *game-over-menu*
+          (list (make-instance 'game-over-header)
+                (make-instance 'restart-button)
+                #+nil(make-instance 'respawn-button)))
+    (apply #'append-entity *game-over-menu*)))
 
 (defclass interpolator ()
   ((start
@@ -234,6 +374,7 @@
         (interpolator-end interpolator) end
         (interpolator-value interpolator) value))
   
+(defvar *camera* nil)
 
 (defentity smooth-camera
     ((target
@@ -269,115 +410,66 @@
                                              'slither::camera))
                       value))
 
-(defbehavior sticky-behavior
-    ((offset
-      :initarg :offset
-      :initform (vec2 0 0)
-      :accessor sticky-offset)
-     (target
-      :initarg :target
-      :initform nil
-      :accessor sticky-target))
-  (:tick (sticky-behavior entity)
-   (with-accessors ((target sticky-target)
-                    (offset sticky-offset)) sticky-behavior
-     (when target
-       (setf (transform-position entity)
-             (v+ (transform-position target) 
-                 offset))))))
+(define-texture dot-texture #P"./dot.png")
 
-(defmethod circles-colliding-p ((circle-1 slither::entity) (circle-2 slither::entity))
-  (with-accessors ((circle-1-position transform-position)
-                   (circle-1-size transform-size)) circle-1
-    (with-accessors ((circle-2-position transform-position)
-                     (circle-2-size transform-size)) circle-2
-      (let ((circle-1-radius (vx circle-1-size))
-            (circle-2-radius (vx circle-2-size)))
-        (< (abs (vdistance circle-2-position circle-1-position))
-           (+ circle-1-radius circle-2-radius))))))
-
-(defmethod circle-colliding-player-p ((circle circle))
-  (or (circles-colliding-p circle *player*)
-      (find-if (lambda (captured-circle)
-                 (circles-colliding-p captured-circle circle))
-               (player-captured-circles *player*))))
-
-(defbehavior circle-collision
-    ((enabled
-      :initarg :enabled
-      :initform t
-      :accessor circle-collision-enabled))
-  (:tick (circle-collision entity)
-   (when (and (circle-collision-enabled circle-collision)
-              (circle-colliding-player-p entity))
-     (let* ((inertia-behavior (entity-find-behavior entity 'inertia-behavior))
-            (velocity (inertia-velocity inertia-behavior)))
-       (if (< 0.1 (vdistance velocity
-                             (v* (v- (normalized-mouse-position) 0.5) ; FIXME: Wtf - change to player velocity
-                                 (vec2 1 -1) 10 *dt*)))
-           (inertia-velocity+ inertia-behavior entity
-                              (v+ (v* (v- velocity) 8 *dt*)
-                                  (v* (v- (normalized-mouse-position) 0.5) ; FIXME: Wtf - change to player velocity
-                                      (vec2 1 -1) 40 *dt*)))
-           (with-accessors ((target sticky-target)
-                            (offset sticky-offset)) (entity-find-behavior entity 'sticky-behavior)
-             (push entity (player-captured-circles *player*))
-             (setf velocity 0
-                   target *player*
-                   offset (v- (transform-position entity)
-                              (transform-position *player*))
-                   (circle-collision-enabled circle-collision) nil)))))))
-
-(defparameter *spawn-bounds-padding* 0.1)
-
-(defmethod out-of-bounds-p ((circle circle))
-  (let ((camera-zoom (slither::camera-zoom
-                      (entity-find-behavior *camera* 'slither::camera))))
-  (with-vec (player-x player-y) (transform-position *player*) 
-    (with-vec (x y) (transform-position circle)
-      (or (< x (- player-x (/ 1 camera-zoom) *spawn-bounds-padding*))
-          (> x (+ player-x (/ 1 camera-zoom) *spawn-bounds-padding*))
-          (< y (- player-y (/ 1 camera-zoom) *spawn-bounds-padding*))
-          (> y (+ player-y (/ 1 camera-zoom) *spawn-bounds-padding*)))))))
-
-(defmacro random-case (&body cases)
-  "Evaluate a random case of `cases`.
-Case is determined at runtime."
-  `(case (random ,(length cases))
-     ,@(loop for case in cases
-             for i from 0
-             collect `(,i ,case))))
-
-(defun random-position-on-edge ()
-  (with-vec (player-x player-y) (transform-position *player*) 
-    (let* ((camera-zoom (coerce (slither::camera-zoom
-                                 (entity-find-behavior *camera* 'slither::camera))
-                                'single-float))
-           (min-x (- player-x (/ 1 camera-zoom) *spawn-bounds-padding*))
-           (max-x (+ player-x (/ 1 camera-zoom) *spawn-bounds-padding*))
-           (min-y (- player-y (/ 1 camera-zoom) *spawn-bounds-padding*))
-           (max-y (+ player-y (/ 1 camera-zoom) *spawn-bounds-padding*)))
-      (random-case
-        (vec2 (random-case min-x max-x)
-              (random-float max-y))
-        (vec2 (random-float max-y)
-              (random-case min-y max-y))))))
-
-(define-texture logo #P"./logo.png")
-
-(defbehavior texture-renderer
+(defentity texture-renderer
     ()
-  (:tick (texture-renderer entity)
+  (:behaviors (make-instance 'slither::camera))
+  (:tick entity
    (with-accessors ((position transform-position)
                     (size transform-size)) entity
-     (slither/render::draw-texture position size logo))))
-
-#+nil(add-entity (make-instance 'slither::entity :behaviors (list (make-instance 'slither::camera)
-                                                             (make-instance 'texture-renderer))))
+     (slither/render::draw-texture position size dot-texture :texture-scale (vec2 200 200)))))
 
 (define-array-texture simple-font-array-texture #P"./font.png"
   :width 6
   :height 8)
+
+(defun string->font-char-codes (string)
+  (loop for char across string
+        collect (case char
+                  (#\Space 0) (#\! 1) (#\" 2) (#\# 3) (#\$ 4)
+                  (#\% 5) (#\& 6) (#\' 7) (#\( 8)
+                  (#\) 9) (#\* 10) (#\+ 11) (#\, 12)
+                  (#\- 13) (#\. 14) (#\/ 15) (#\0 16)
+                  (#\1 17) (#\2 18) (#\3 19) (#\4 20)
+                  (#\5 21) (#\6 22) (#\7 23) (#\8 24)
+                  (#\9 25) (#\: 26) (#\; 27) (#\< 28)
+                  (#\= 29) (#\> 30) (#\? 31) (#\@ 32)
+                  (#\A 33) (#\B 34) (#\C 35) (#\D 36)
+                  (#\E 37) (#\F 38) (#\G 39) (#\H 40)
+                  (#\I 41) (#\J 42) (#\K 43) (#\L 44)
+                  (#\M 45) (#\N 46) (#\O 47) (#\P 48)
+                  (#\Q 49) (#\R 50) (#\S 51) (#\T 52)
+                  (#\U 53) (#\V 54) (#\W 55) (#\X 56)
+                  (#\Y 57) (#\Z 58) (#\[ 59) (#\\ 60)
+                  (#\] 61) (#\^ 62) (#\_ 63) (#\` 64)
+                  (#\a 65) (#\b 66) (#\c 67) (#\d 68)
+                  (#\e 69) (#\f 70) (#\g 71) (#\h 72)
+                  (#\i 73) (#\j 74) (#\k 75) (#\l 76)
+                  (#\m 77) (#\n 78) (#\o 79) (#\p 80)
+                  (#\q 81) (#\r 82) (#\s 83) (#\t 84)
+                  (#\u 85) (#\v 86) (#\w 87) (#\x 88)
+                  (#\y 89) (#\z 90) (#\{ 91) #+nil(#\: 92) ;; TODO: Wtf is 92?
+                  (#\} 93) (#\Newline 100))))
+
+(defun draw-char-codes (char-codes position size)
+  (loop for char in char-codes
+        for x from 0
+        with y = 0
+        when (= char 100)
+        do (decf y 2)
+           (setf x 0)
+        else
+        do (slither/render::draw-array-texture (v+ (v- position (vec2 (* (vx size) 2 (length char-codes) 0.5) (* (vy size) 0.5)))
+                                                   (vec2 (* (vx size) 2 x) y))
+                                               (v* size (vec2 0.6 0.8))
+                                               char
+                                               simple-font-array-texture)))
+
+(defun draw-text (text position size)
+  (draw-char-codes (string->font-char-codes text)
+                   position
+                   size))
 
 (defbehavior simple-font-renderer
     ((text
@@ -388,78 +480,139 @@ Case is determined at runtime."
   (:tick (font-renderer entity)
    (with-accessors ((position transform-position)
                     (size transform-size)) entity
-     (labels ((string->font-char-codes (string)
-                (loop for char across string
-                      collect (case char
-                                (#\Space 0) (#\! 1) (#\" 2) (#\# 3) (#\$ 4)
-                                (#\% 5) (#\& 6) (#\' 7) (#\( 8)
-                                (#\) 9) (#\* 10) (#\+ 11) (#\, 12)
-                                (#\- 13) (#\. 14) (#\/ 15) (#\0 16)
-                                (#\1 17) (#\2 18) (#\3 19) (#\4 20)
-                                (#\5 21) (#\6 22) (#\7 23) (#\8 24)
-                                (#\9 25) (#\: 26) (#\; 27) (#\< 28)
-                                (#\= 29) (#\> 30) (#\? 31) (#\@ 32)
-                                (#\A 33) (#\B 34) (#\C 35) (#\D 36)
-                                (#\E 37) (#\F 38) (#\G 39) (#\H 40)
-                                (#\I 41) (#\J 42) (#\K 43) (#\L 44)
-                                (#\M 45) (#\N 46) (#\O 47) (#\P 48)
-                                (#\Q 49) (#\R 50) (#\S 51) (#\T 52)
-                                (#\U 53) (#\V 54) (#\W 55) (#\X 56)
-                                (#\Y 57) (#\Z 58) (#\[ 59) (#\\ 60)
-                                (#\] 61) (#\^ 62) (#\_ 63) (#\` 64)
-                                (#\a 65) (#\b 66) (#\c 67) (#\d 68)
-                                (#\e 69) (#\f 70) (#\g 71) (#\h 72)
-                                (#\i 73) (#\j 74) (#\k 75) (#\l 76)
-                                (#\m 77) (#\n 78) (#\o 79) (#\p 80)
-                                (#\q 81) (#\r 82) (#\s 83) (#\t 84)
-                                (#\u 85) (#\v 86) (#\w 87) (#\x 88)
-                                (#\y 89) (#\z 90) (#\{ 91) #+nil(#\: 92) ;; TODO: Wtf is 92?
-                                (#\} 93) (#\Newline 100)))))
-     (let ((text (string->font-char-codes (font-renderer-text font-renderer))))
-       (loop for char in text
-             for x from 0
-             with y = 0
-             when (= char 100)
-             do (decf y 2)
-                (setf x 0)
-             else
-             do (slither/render::draw-array-texture (v+ position (vec2 (* 1.2 x) y))
-                                                    (vec2 0.6 0.8)
-                                                    char
-                                                    simple-font-array-texture)))))))
-
-  
+     (draw-text (font-renderer-text font-renderer)
+                position
+                size))))
 
 (defentity background
     ()
   (:tick background
-   (draw-static)))
+     (draw-texture (vec2 0 0)
+                   (vec2 (* *arena-width* 0.5) (* *arena-height* 0.5))
+                   dot-texture
+                   :texture-scale (vec2 100 100))))
 
 (defentity fps-counter
     ()
   (:behaviors (make-instance 'simple-font-renderer :text "0"))
   (:tick fps-counter
+   (setf (transform-position fps-counter) (slither/render:screen-space-position (vec2 -0.99 -0.98)))
+   (setf (transform-size fps-counter) (slither/render:screen-space-scale (vec2 10 10)))
    (setf (font-renderer-text (entity-find-behavior fps-counter 'simple-font-renderer))
          (format nil "~$" (fps)))))
 
+(defun score ()
+  (floor (* (circle-radius *player*) 100)))
 
-#+nil(add-entity (make-instance 'slither::entity
-                                :size (vec2 1.0 1.0)
-                                :behaviors (list (make-instance 'slither::camera)
-                                                 (make-instance 'simple-font-renderer))))
+(defentity score-counter
+    ()
+  (:behaviors (make-instance 'simple-font-renderer :text "0"))
+  (:tick score-counter
+   (setf (transform-position score-counter) (slither/render:screen-space-position (vec2 -0.98 0.95)))
+   (setf (transform-size score-counter) (slither/render:screen-space-scale (vec2 0.016 0.019)))
+   (setf (font-renderer-text (entity-find-behavior score-counter 'simple-font-renderer))
+         (format nil "Size: ~a" (score)))))
 
-#+nil(start-game 
-      (lambda ()
-        (let* ((player (make-instance 'player
-                                      :size (vec2 1.0 1.0)))
-               (circles (append 
-                         (list player) 
-                         (loop repeat 40
-                               collect (make-instance 'circle))))
-               (camera (make-instance 'smooth-camera :target player)))
-          (add-entity camera)
-          (apply #'add-entity circles)
-          (add-entity (make-instance 'circles-renderer
-                                     :circles circles
-                                     :camera camera))
-          (add-entity (make-instance 'fps-counter)))))
+(defentity restart-button
+    ()
+  (:tick menu
+   (let* ((position (vec2 0.0 0.0))
+          (scale (vec2 0.12 0.03))
+          (left (- (vx position) (* (vx scale) 0.5)))
+          (right (+ (vx position) (* (vx scale) 0.5)))
+          (bottom (- (vy position) (* (vy scale) 0.5)))
+          (top (+ (vy position) (* (vy scale) 0.5)))
+          (mouse-position (normalized-screen-space-mouse-position))
+          (hover-p (and (< (vx mouse-position) right)
+                        (> (vx mouse-position) left)
+                        (< (vy mouse-position) top)
+                        (> (vy mouse-position) bottom)))
+          (color (if hover-p
+                     (vec4 0.9 0.9 0.6 1.0)
+                     (vec4 0.8 0.8 0.5 1.0))))
+     (draw-rectangle (slither/render:screen-space-position position)
+                     (slither/render:screen-space-scale scale)
+                     color)
+     (draw-text "Restart"
+                (slither/render:screen-space-position (vec2 -0.0 0.0))
+                (slither/render:screen-space-scale (vec2 0.016 0.019)))
+     (when (and hover-p
+                (key-held-p :left))
+       (restart-game)))))
+
+(defun respawn ()
+  (apply #'remove-entity *game-over-menu*)
+  (setf *game-over-menu* nil)
+  (circle-reset *player*)
+  (setf (circle-radius *player*) 1.0))
+
+(defentity respawn-button
+    ()
+  (:tick menu
+   (let* ((position (vec2 0.0 0.1))
+          (scale (vec2 0.12 0.03))
+          (left (- (vx position) (* (vx scale) 0.5)))
+          (right (+ (vx position) (* (vx scale) 0.5)))
+          (bottom (- (vy position) (* (vy scale) 0.5)))
+          (top (+ (vy position) (* (vy scale) 0.5)))
+          (mouse-position (normalized-screen-space-mouse-position))
+          (hover-p (and (< (vx mouse-position) right)
+                        (> (vx mouse-position) left)
+                        (< (vy mouse-position) top)
+                        (> (vy mouse-position) bottom)))
+          (color (if hover-p
+                     (vec4 0.9 0.9 0.6 1.0)
+                     (vec4 0.8 0.8 0.5 1.0))))
+     (draw-rectangle (slither/render:screen-space-position position)
+                     (slither/render:screen-space-scale scale)
+                     color)
+     (draw-text "Respawn"
+                (slither/render:screen-space-position (vec2 -0.0 0.1))
+                (slither/render:screen-space-scale (vec2 0.016 0.019)))
+     (when (and hover-p
+                (key-held-p :left))
+       (respawn)))))
+
+(defvar *final-score* 0)
+
+(defentity game-over-header
+    ()
+  (:tick header
+   (draw-text (format nil "You lost")
+              (slither/render:screen-space-position (vec2 0 0.8))
+              (slither/render:screen-space-scale (vec2 0.026 0.029)))
+   (draw-text (format nil "Your final score was: ~d" *final-score*)
+              (slither/render:screen-space-position (vec2 0 0.7))
+              (slither/render:screen-space-scale (vec2 0.026 0.029)))))
+
+(defentity game-won-header
+    ()
+  (:tick header
+   (draw-text (format nil "You Won!")
+              (slither/render:screen-space-position (vec2 0 0.8))
+              (slither/render:screen-space-scale (vec2 0.026 0.029)))
+   (draw-text (format nil "Your final score was: ~d" *final-score*)
+              (slither/render:screen-space-position (vec2 0 0.7))
+              (slither/render:screen-space-scale (vec2 0.026 0.029)))))
+
+(defun restart-game ()
+  (setf slither::*entities* nil)
+  (setf *game-over-menu* nil)
+  (let* ((player (make-instance 'player
+                                :size (vec2 1.0 1.0)))
+         (circles (append 
+                   (list player) 
+                   (loop repeat 40
+                         collect (make-instance 'circle))))
+         (camera (make-instance 'smooth-camera :target player)))
+    (add-entity camera)
+    (add-entity (make-instance 'score-counter))
+    (apply #'add-entity circles)
+    (setf *circles* circles)
+    (add-entity (make-instance 'circles-renderer))
+    (add-entity (make-instance 'arena-borders))
+    (add-entity (make-instance 'background))))
+
+(defun start-glob ()
+  (start-game
+   #'restart-game))

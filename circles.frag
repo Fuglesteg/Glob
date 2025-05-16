@@ -43,16 +43,13 @@ void main() {
     float totalWeight = 0.0;
 
     for (int i = 0; i <= CIRCLES_COUNT; i++) {
-        vec2 position = (circlePositions[i] - camera) * zoom;
+        vec2 position = (circlePositions[i] - camera) * (zoom * 0.5);
         position += vec2(0.5 * aspect, 0.5);
 
         vec3 color = circleColors[i];
         float radius = circleRadii[i] * zoom;
 
         float distance = distance(uv, position);
-
-        if (distance > radius + zoom * 10)
-            continue;
 
         float signedDistance = distance - radius;
 
