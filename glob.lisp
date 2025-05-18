@@ -4,7 +4,8 @@
         #:slither/utils
         #:org.shirakumo.fraf.math.vectors
         #:org.shirakumo.fraf.math.matrices)
-(:import-from #:slither/input :key-held-p))
+  (:import-from #:slither/input :key-held-p)
+  (:export #:start-glob))
 
 (in-package :glob)
 
@@ -298,7 +299,8 @@ Case is determined at runtime."
    (make-instance 'inertia-behavior)
    (make-instance 'circle-collision))
   (:start player
-   (setf *player* player))
+   (setf *player* player
+         *final-score* (score)))
   (:tick player
    (unless *game-over-menu*
      (inertia-velocity+ (entity-find-behavior player 'inertia-behavior)
@@ -311,7 +313,7 @@ Case is determined at runtime."
                                     *circles*)))
      (cond
        (player-won-game (player-won))
-       (player-lost-game (player-lost-game)))))
+       (player-lost-game (player-lost-game))))))
 
 (defun player-won ()
   (unless *game-over-menu*
