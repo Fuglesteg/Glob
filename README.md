@@ -1,6 +1,6 @@
 # Glob
 
-My submission to the Spring Lisp Game Jam 2025
+My submission to the [Spring Lisp Game Jam 2025](https://itch.io/jam/spring-lisp-game-jam-2025/rate/3569976).
 The first game made using [Slither](https://github.com/fuglesteg/slither)
 
 It's a simple game similar to, and inspired by [Agar.io](https://agar.io). You eat other blobs to
