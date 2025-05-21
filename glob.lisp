@@ -305,7 +305,7 @@ Case is determined at runtime."
    (unless *game-over-menu*
      (inertia-velocity+ (entity-find-behavior player 'inertia-behavior)
                         (v* (vclamp -0.5 (v* (normalized-screen-space-mouse-position) 5) 0.5)
-                            (vec2 1 -1) 4 *dt*)))
+                            4 *dt*)))
    ;; Check if player has won or lost
    (let ((player-won-game (<= 2000 (circle-radius player)))
          (player-lost-game (find-if (lambda (circle) 
@@ -336,7 +336,7 @@ Case is determined at runtime."
     (setf *game-over-menu*
           (list (make-instance 'game-over-header)
                 (make-instance 'restart-button)
-                #+nil(make-instance 'respawn-button)))
+                (make-instance 'respawn-button)))
     (apply #'append-entity *game-over-menu*)))
 
 (defclass interpolator ()
@@ -386,6 +386,7 @@ Case is determined at runtime."
      (zoom-interpolator
       :initarg :zoom-interpolator
       :initform (make-instance 'interpolator
+                               :start 0.01
                                :end 0.06)
       :accessor smooth-camera-zoom-interpolator))
   (:behaviors
@@ -520,10 +521,10 @@ Case is determined at runtime."
   (:tick menu
    (let* ((position (vec2 0.0 0.0))
           (scale (vec2 0.12 0.03))
-          (left (- (vx position) (* (vx scale) 0.5)))
-          (right (+ (vx position) (* (vx scale) 0.5)))
-          (bottom (- (vy position) (* (vy scale) 0.5)))
-          (top (+ (vy position) (* (vy scale) 0.5)))
+          (left (- (vx position) (vx scale)))
+          (right (+ (vx position) (vx scale)))
+          (bottom (- (vy position) (vy scale)))
+          (top (+ (vy position) (vy scale)))
           (mouse-position (normalized-screen-space-mouse-position))
           (hover-p (and (< (vx mouse-position) right)
                         (> (vx mouse-position) left)
@@ -553,10 +554,10 @@ Case is determined at runtime."
   (:tick menu
    (let* ((position (vec2 0.0 0.1))
           (scale (vec2 0.12 0.03))
-          (left (- (vx position) (* (vx scale) 0.5)))
-          (right (+ (vx position) (* (vx scale) 0.5)))
-          (bottom (- (vy position) (* (vy scale) 0.5)))
-          (top (+ (vy position) (* (vy scale) 0.5)))
+          (left (- (vx position) (vx scale)))
+          (right (+ (vx position) (vx scale)))
+          (bottom (- (vy position) (vy scale)))
+          (top (+ (vy position) (vy scale)))
           (mouse-position (normalized-screen-space-mouse-position))
           (hover-p (and (< (vx mouse-position) right)
                         (> (vx mouse-position) left)
